@@ -12,7 +12,7 @@ from openai import OpenAI
 from tools import run_tool_by_command, run_nmap, run_curl_headers
 from search import handle_search_dispatch
 
-OPENROUTER_MODEL = "meta-llama/llama-3.3-70b-instruct:free"
+OPENROUTER_MODEL = "google/gemma-3-27b-it:free"
 MAX_TOKENS       = 4096
 MAX_TOOL_LOOPS   = 5   # giảm từ 9 — cloud nhanh hơn, ít cần loop nhiều
 
