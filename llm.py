@@ -12,7 +12,7 @@ from openai import OpenAI
 from tools import run_tool_by_command, run_nmap, run_curl_headers
 from search import handle_search_dispatch
 
-OPENROUTER_MODEL = "google/gemma-3-27b-it:free"
+OPENROUTER_MODEL = "anthropic/claude-haiku-4-5"
 MAX_TOKENS       = 4096
 MAX_TOOL_LOOPS   = 5   # giảm từ 9 — cloud nhanh hơn, ít cần loop nhiều
 
