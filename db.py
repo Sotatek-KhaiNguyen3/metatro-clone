@@ -76,8 +76,8 @@ def save_exploit(sl_no, exploit_name, tool_used, payload, result, notes):
         INSERT INTO exploits_attempted (sl_no, exploit_name, tool_used, payload, result, notes)
         VALUES (%s, %s, %s, %s, %s, %s)
     """, (sl_no,
-          str(exploit_name or "")[:500],
-          str(tool_used or "")[:200],
+          str(exploit_name or "")[:255],
+          str(tool_used or "")[:100],
           str(payload or ""),
           str(result or "")[:100],
           str(notes or "")))
