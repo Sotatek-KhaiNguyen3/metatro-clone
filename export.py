@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import os
+import html
 import datetime
 import mysql.connector
 from reportlab.lib.pagesizes import A4
@@ -155,7 +156,7 @@ def export_pdf(data: dict, output_dir: str) -> str:
             lbl = ParagraphStyle("vl", fontSize=9, fontName="Helvetica-Bold", textColor=sc)
             story.append(Paragraph(f"[{(v[3] or 'UNKNOWN').upper()}] {v[2]}", lbl))
             if v[6]:
-                story.append(Paragraph(str(v[6]), body_style))
+                story.append(Paragraph(html.escape(str(v[6])), body_style))
             story.append(Spacer(1, 4))
     else:
         story.append(Paragraph("No vulnerabilities recorded.", body_style))
@@ -167,7 +168,7 @@ def export_pdf(data: dict, output_dir: str) -> str:
     if data["fixes"]:
         for f in data["fixes"]:
             story.append(Paragraph(f"Fix for vuln id={f[2]}:", body_style))
-            story.append(Paragraph(str(f[3] or "-"), code_style))
+            story.append(Paragraph(html.escape(str(f[3] or "-")), code_style))
             story.append(Spacer(1, 3))
     else:
         story.append(Paragraph("No fixes recorded.", body_style))
@@ -179,8 +180,8 @@ def export_pdf(data: dict, output_dir: str) -> str:
     if data["exploits"]:
         ed = [["#", "Exploit", "Tool", "Result"]]
         for e in data["exploits"]:
-            ed.append([str(e[0]), str(e[2] or "-")[:60],
-                       str(e[3] or "-")[:30], str(e[5] or "-")[:30]])
+            ed.append([str(e[0]), html.escape(str(e[2] or "-"))[:60],
+                       html.escape(str(e[3] or "-"))[:30], html.escape(str(e[5] or "-"))[:30]])
         et = Table(ed, colWidths=[10*mm, 80*mm, 40*mm, 28*mm])
         et.setStyle(TableStyle([
             ("FONTNAME",       (0,0), (-1,0),  "Helvetica-Bold"),
@@ -203,7 +204,7 @@ def export_pdf(data: dict, output_dir: str) -> str:
         for line in str(ai).split("\n"):
             line = line.strip()
             if line:
-                story.append(Paragraph(line, body_style))
+                story.append(Paragraph(html.escape(line), body_style))
                 story.append(Spacer(1, 2))
     else:
         story.append(Paragraph("No AI analysis recorded.", body_style))

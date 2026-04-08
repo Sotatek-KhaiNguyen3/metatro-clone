@@ -79,7 +79,7 @@ def save_exploit(sl_no, exploit_name, tool_used, payload, result, notes):
           str(exploit_name or "")[:500],
           str(tool_used or "")[:200],
           str(payload or ""),
-          str(result or "")[:500],
+          str(result or "")[:100],
           str(notes or "")))
     conn.commit()
     conn.close()
