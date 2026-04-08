@@ -1,28 +1,32 @@
 #!/usr/bin/env python3
 """
 METATRON - llm.py
-Ollama interface for metatron-qwen model.
+OpenRouter API interface for METATRON.
 Builds prompts, handles AI responses, runs tool dispatch loop.
-Model: metatron-qwen (fine-tuned from huihui_ai/qwen3.5-abliterated:9b)
+Model: meta-llama/llama-3.3-70b-instruct:free (via OpenRouter)
 """
 
 import re
-import requests
-import json
+import os
+from openai import OpenAI
 from tools import run_tool_by_command, run_nmap, run_curl_headers
 from search import handle_search_dispatch
 
-OLLAMA_URL  = "http://localhost:11434/api/generate"
-MODEL_NAME  = "metatron-qwen"
-MAX_TOKENS  = 4096
-MAX_TOOL_LOOPS = 9   # max times AI can call tools per session
-OLLAMA_TIMEOUT = 600 
+OPENROUTER_MODEL = "meta-llama/llama-3.3-70b-instruct:free"
+MAX_TOKENS       = 4096
+MAX_TOOL_LOOPS   = 5   # giảm từ 9 — cloud nhanh hơn, ít cần loop nhiều
+
+_client = OpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key=os.environ.get("OPENROUTER_API_KEY", ""),
+)
+
 
 # ─────────────────────────────────────────────
 # SYSTEM PROMPT
 # ─────────────────────────────────────────────
 
-SYSTEM_PROMPT = """You are METATRON, an elite AI penetration testing assistant running on Parrot OS.
+SYSTEM_PROMPT = """You are METATRON, an elite AI penetration testing assistant.
 You are precise, technical, and direct. No fluff.
 
 You have access to real tools. To use them, write tags in your response:
@@ -30,16 +34,17 @@ You have access to real tools. To use them, write tags in your response:
   [TOOL: nmap -sV 192.168.1.1]       → runs nmap or any CLI tool
   [SEARCH: CVE-2021-44228 exploit]   → searches the web via DuckDuckGo
 
-Rules:
-- Always analyze scan data thoroughly before suggesting exploits
-- List vulnerabilities with: name, severity (critical/high/medium/low), port, service
-- For each vulnerability, suggest a concrete fix
-- If you need more information, use [SEARCH:] or [TOOL:]
-- Format vulnerabilities clearly so they can be saved to a database
-- Be specific about CVE IDs when you know them
-- Always give a final risk rating: CRITICAL / HIGH / MEDIUM / LOW
+STRICT RULES:
+- Only use IP addresses and domain names that appear in the RECON DATA below. Never invent IPs.
+- Only reference CVE IDs you are confident exist. If unsure, do not include a CVE ID.
+- Always analyze scan data thoroughly before suggesting exploits.
+- List vulnerabilities with: name, severity (critical/high/medium/low), port, service.
+- For each vulnerability, suggest a concrete fix.
+- If you need more information, use [SEARCH:] or [TOOL:].
+- Format vulnerabilities clearly so they can be saved to a database.
+- Always give a final risk rating: CRITICAL / HIGH / MEDIUM / LOW.
 
-Output format for vulnerabilities (use this exactly):
+Output format for vulnerabilities (use this EXACTLY, one per line):
 VULN: <name> | SEVERITY: <level> | PORT: <port> | SERVICE: <service>
 DESC: <description>
 FIX: <fix recommendation>
@@ -56,47 +61,44 @@ SUMMARY: <2-3 sentence overall summary>
 
 
 # ─────────────────────────────────────────────
-# OLLAMA API CALL
+# OPENROUTER API CALL
 # ─────────────────────────────────────────────
 
-def ask_ollama(prompt: str, context: list = None) -> str:
+def ask_openrouter(prompt: str) -> str:
     """
-    Send a prompt to metatron-qwen via Ollama API.
-    context: list of previous message dicts for multi-turn conversation.
-    Returns the AI response string.
+    Send a prompt to OpenRouter and return the response string.
+    System prompt is passed separately for better instruction following.
     """
+    if not _client.api_key:
+        return "[!] OPENROUTER_API_KEY not set. Run: export OPENROUTER_API_KEY=sk-or-v1-..."
+
     try:
-        payload = {
-            "model":  MODEL_NAME,
-            "prompt": prompt,
-            "stream": False,
-            "options": {
-                "num_predict": MAX_TOKENS,
-                "temperature": 0.7,
-                "top_p": 0.9,
-            }
-        }
+        print(f"\n[*] Sending to {OPENROUTER_MODEL}...")
+        resp = _client.chat.completions.create(
+            model=OPENROUTER_MODEL,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user",   "content": prompt},
+            ],
+            max_tokens=MAX_TOKENS,
+            temperature=0.7,
+            extra_headers={
+                "HTTP-Referer": "https://github.com/sooryathejas/METATRON",
+                "X-Title": "METATRON",
+            },
+        )
+        response = resp.choices[0].message.content or ""
+        return response.strip()
 
-        print(f"\n[*] Sending to {MODEL_NAME}...")
-        resp = requests.post(OLLAMA_URL, json=payload, timeout=OLLAMA_TIMEOUT)
-        resp.raise_for_status()
-
-        data = resp.json()
-        response = data.get("response", "").strip()
-
-        if not response:
-            return "[!] Model returned empty response."
-
-        return response
-
-    except requests.exceptions.ConnectionError:
-        return "[!] Cannot connect to Ollama. Is it running? Try: ollama serve"
-    except requests.exceptions.Timeout:
-        return "[!] Ollama timed out. Model may be loading, try again."
-    except requests.exceptions.HTTPError as e:
-        return f"[!] Ollama HTTP error: {e}"
     except Exception as e:
-        return f"[!] Unexpected error: {e}"
+        err = str(e)
+        if "api_key" in err.lower() or "401" in err:
+            return "[!] Invalid API key. Check OPENROUTER_API_KEY."
+        if "429" in err:
+            return "[!] Rate limit hit. Wait a moment and retry."
+        if "503" in err or "502" in err:
+            return "[!] OpenRouter unavailable. Try again shortly."
+        return f"[!] OpenRouter error: {e}"
 
 
 # ─────────────────────────────────────────────
@@ -271,7 +273,7 @@ def analyse_target(target: str, raw_scan: str) -> dict:
     """
     Full analysis pipeline:
     1. Build initial prompt with scan data
-    2. Send to metatron-qwen
+    2. Send to OpenRouter model
     3. Run tool dispatch loop if AI requests tools
     4. Parse structured output
     5. Return everything ready for db.py to save
@@ -286,30 +288,39 @@ def analyse_target(target: str, raw_scan: str) -> dict:
     """
 
     # ── Step 1: initial prompt ──────────────────
-    initial_prompt = f"""{SYSTEM_PROMPT}
-
-TARGET: {target}
+    initial_prompt = f"""TARGET: {target}
 
 RECON DATA:
 {raw_scan}
 
 Analyze this target completely. Use [TOOL:] or [SEARCH:] if you need more information.
-List all vulnerabilities, fixes, and suggest exploits where applicable.
+List all vulnerabilities found, fixes, and suggest exploits where applicable.
+Remember: only use IPs/domains from the RECON DATA above.
 """
 
     full_conversation = initial_prompt
-    final_response    = ""
+    best_response     = ""
+    best_vuln_count   = 0
 
     # ── Step 2: tool dispatch loop ──────────────
     for loop in range(MAX_TOOL_LOOPS):
-        response = ask_ollama(full_conversation)
+        response = ask_openrouter(full_conversation)
 
         print(f"\n{'─'*60}")
         print(f"[METATRON - Round {loop + 1}]")
         print(f"{'─'*60}")
         print(response)
 
-        final_response = response
+        # track the response with most parsed vulns (không mất kết quả tốt)
+        vuln_count = len(parse_vulnerabilities(response))
+        if vuln_count >= best_vuln_count:
+            best_vuln_count = vuln_count
+            best_response   = response
+
+        # stop if error from API
+        if response.startswith("[!]"):
+            print("\n[!] API error — stopping loop.")
+            break
 
         # check for tool calls
         tool_calls = extract_tool_calls(response)
@@ -328,6 +339,9 @@ List all vulnerabilities, fixes, and suggest exploits where applicable.
             f"Continue your analysis with this new information. "
             f"If analysis is complete, give the final RISK_LEVEL and SUMMARY."
         )
+
+    # dùng best_response thay vì chỉ lấy round cuối
+    final_response  = best_response or response
 
     # ── Step 3: parse structured output ─────────
     vulnerabilities = parse_vulnerabilities(final_response)
@@ -352,19 +366,17 @@ List all vulnerabilities, fixes, and suggest exploits where applicable.
 # ─────────────────────────────────────────────
 
 if __name__ == "__main__":
-    print("[ llm.py test — direct AI query ]\n")
+    print("[ llm.py test — OpenRouter direct query ]\n")
 
-    # test if ollama is reachable
-    try:
-        r = requests.get("http://localhost:11434", timeout=5)
-        print("[+] Ollama is running.")
-    except Exception:
-        print("[!] Ollama not reachable. Run: ollama serve")
+    if not os.environ.get("OPENROUTER_API_KEY"):
+        print("[!] Set your API key first:")
+        print("    export OPENROUTER_API_KEY=sk-or-v1-...")
         exit(1)
 
-    target = input("Test target: ").strip()
+    print(f"[+] Using model: {OPENROUTER_MODEL}")
+    target    = input("Test target: ").strip()
     test_scan = f"Test recon for {target} — nmap and whois data would appear here."
-    result = analyse_target(target, test_scan)
+    result    = analyse_target(target, test_scan)
 
     print(f"\nRisk Level : {result['risk_level']}")
     print(f"Summary    : {result['summary']}")
