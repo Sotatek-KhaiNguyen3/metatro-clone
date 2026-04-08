@@ -69,7 +69,7 @@ def ask_openrouter(prompt: str) -> str:
     Send a prompt to OpenRouter and return the response string.
     System prompt is passed separately for better instruction following.
     """
-    if not _client.api_key:
+    if not os.environ.get("OPENROUTER_API_KEY"):
         return "[!] OPENROUTER_API_KEY not set. Run: export OPENROUTER_API_KEY=sk-or-v1-..."
 
     try:
