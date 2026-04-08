@@ -95,7 +95,7 @@ Parrot OS / Kali Linux                    Ubuntu 22.04
 ### 1. Clone repository
 
 ```bash
-git clone https://github.com/sooryathejas/METATRON.git
+git clone https://github.com/Sotatek-KhaiNguyen3/metatro-clone.git
 cd METATRON
 ```
 
