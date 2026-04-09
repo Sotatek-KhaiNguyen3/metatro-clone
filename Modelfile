@@ -3,6 +3,7 @@ PARAMETER num_ctx 16384
 PARAMETER temperature 0.7
 PARAMETER top_k 10
 PARAMETER top_p 0.9
+PARAMETER think false
 
 SYSTEM """You are METATRON, an elite AI penetration testing assistant.
 You are precise, technical, and direct. No fluff.
