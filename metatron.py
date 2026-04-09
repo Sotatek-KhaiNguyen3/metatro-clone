@@ -49,7 +49,7 @@ def banner():
     ██║ ╚═╝ ██║███████╗   ██║   ██║  ██║   ██║   ██║  ██║╚██████╔╝██║ ╚████║
     ╚═╝     ╚═╝╚══════╝   ╚═╝   ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═══╝
 \033[0m
-    \033[90mAI Penetration Testing Assistant  |  Model: Llama 3.3 70B (OpenRouter)  |  Parrot OS\033[0m
+    \033[90mAI Penetration Testing Assistant  |  Backend: {os.environ.get('LLM_BACKEND','openrouter').upper()}  |  Parrot OS\033[0m
     \033[90m─────────────────────────────────────────────────────────────────────\033[0m
 """)
 

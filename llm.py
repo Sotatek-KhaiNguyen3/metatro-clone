@@ -1,29 +1,46 @@
 #!/usr/bin/env python3
 """
 METATRON - llm.py
-OpenRouter API interface for METATRON.
-Builds prompts, handles AI responses, runs tool dispatch loop.
-Model: meta-llama/llama-3.3-70b-instruct:free (via OpenRouter)
+Dual-backend LLM interface:
+  - local  : Ollama (metatron-qwen 9B, chạy trên máy hoặc EC2)
+  - openrouter : Claude Haiku / Llama / Gemma qua OpenRouter API
+
+Chọn backend bằng biến môi trường:
+  export LLM_BACKEND=local        → dùng Ollama
+  export LLM_BACKEND=openrouter   → dùng OpenRouter (mặc định)
 """
 
 import re
 import os
+import requests
 from openai import OpenAI
 from tools import run_tool_by_command, run_nmap, run_curl_headers
 from search import handle_search_dispatch
 
-OPENROUTER_MODEL = "anthropic/claude-haiku-4-5"
-MAX_TOKENS       = 4096
-MAX_TOOL_LOOPS   = 5   # giảm từ 9 — cloud nhanh hơn, ít cần loop nhiều
+# ─────────────────────────────────────────────
+# CONFIG
+# ─────────────────────────────────────────────
 
-_client = OpenAI(
+# backend: "local" hoặc "openrouter"
+LLM_BACKEND = os.environ.get("LLM_BACKEND", "openrouter").lower()
+
+# OpenRouter
+OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "anthropic/claude-haiku-4-5")
+_openrouter_client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=os.environ.get("OPENROUTER_API_KEY", ""),
 )
 
+# Ollama local
+OLLAMA_MODEL   = os.environ.get("OLLAMA_MODEL", "metatron-qwen")
+OLLAMA_URL     = os.environ.get("OLLAMA_URL",   "http://localhost:11434/api/generate")
+
+MAX_TOKENS     = 4096
+MAX_TOOL_LOOPS = 5
+
 
 # ─────────────────────────────────────────────
-# SYSTEM PROMPT
+# SYSTEM PROMPT (dùng chung cho cả 2 backend)
 # ─────────────────────────────────────────────
 
 SYSTEM_PROMPT = """You are METATRON, an elite AI penetration testing assistant.
@@ -61,20 +78,52 @@ SUMMARY: <2-3 sentence overall summary>
 
 
 # ─────────────────────────────────────────────
-# OPENROUTER API CALL
+# BACKEND: OLLAMA (local)
+# ─────────────────────────────────────────────
+
+def ask_ollama(prompt: str) -> str:
+    """
+    Gửi prompt đến Ollama đang chạy local (hoặc EC2).
+    Model: metatron-qwen (9B) hoặc bất kỳ model nào đang chạy.
+    """
+    try:
+        print(f"\n[*] Sending to Ollama ({OLLAMA_MODEL})...")
+        payload = {
+            "model":  OLLAMA_MODEL,
+            "prompt": f"{SYSTEM_PROMPT}\n\n{prompt}",
+            "stream": False,
+            "options": {
+                "num_predict": MAX_TOKENS,
+                "temperature": 0.7,
+            }
+        }
+        resp = requests.post(OLLAMA_URL, json=payload, timeout=600)
+        resp.raise_for_status()
+        return resp.json().get("response", "").strip()
+
+    except requests.exceptions.ConnectionError:
+        return "[!] Ollama không chạy. Khởi động bằng: ollama run metatron-qwen"
+    except requests.exceptions.Timeout:
+        return "[!] Ollama timeout — model quá chậm hoặc prompt quá dài."
+    except Exception as e:
+        return f"[!] Ollama error: {e}"
+
+
+# ─────────────────────────────────────────────
+# BACKEND: OPENROUTER (cloud)
 # ─────────────────────────────────────────────
 
 def ask_openrouter(prompt: str) -> str:
     """
-    Send a prompt to OpenRouter and return the response string.
-    System prompt is passed separately for better instruction following.
+    Gửi prompt đến OpenRouter cloud API.
+    Model mặc định: anthropic/claude-haiku-4-5
     """
     if not os.environ.get("OPENROUTER_API_KEY"):
         return "[!] OPENROUTER_API_KEY not set. Run: export OPENROUTER_API_KEY=sk-or-v1-..."
 
     try:
-        print(f"\n[*] Sending to {OPENROUTER_MODEL}...")
-        resp = _client.chat.completions.create(
+        print(f"\n[*] Sending to {OPENROUTER_MODEL} (OpenRouter)...")
+        resp = _openrouter_client.chat.completions.create(
             model=OPENROUTER_MODEL,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
@@ -83,12 +132,11 @@ def ask_openrouter(prompt: str) -> str:
             max_tokens=MAX_TOKENS,
             temperature=0.7,
             extra_headers={
-                "HTTP-Referer": "https://github.com/sooryathejas/METATRON",
+                "HTTP-Referer": "https://github.com/Sotatek-KhaiNguyen3/metatro-clone",
                 "X-Title": "METATRON",
             },
         )
-        response = resp.choices[0].message.content or ""
-        return response.strip()
+        return (resp.choices[0].message.content or "").strip()
 
     except Exception as e:
         err = str(e)
@@ -102,31 +150,39 @@ def ask_openrouter(prompt: str) -> str:
 
 
 # ─────────────────────────────────────────────
+# ROUTER — chọn backend tự động
+# ─────────────────────────────────────────────
+
+def ask_llm(prompt: str) -> str:
+    """
+    Gọi backend đang được chọn (local hoặc openrouter).
+    Set bằng: export LLM_BACKEND=local | openrouter
+    """
+    if LLM_BACKEND == "local":
+        return ask_ollama(prompt)
+    else:
+        return ask_openrouter(prompt)
+
+
+# ─────────────────────────────────────────────
 # TOOL DISPATCH
 # ─────────────────────────────────────────────
 
 def extract_tool_calls(response: str) -> list:
     """
-    Extract all [TOOL: ...] and [SEARCH: ...] tags from AI response.
-    Returns list of tuples: [("TOOL", "nmap -sV x.x.x.x"), ("SEARCH", "CVE...")]
+    Extract tất cả [TOOL: ...] và [SEARCH: ...] từ AI response.
+    Trả về list tuples: [("TOOL", "nmap -sV x.x.x.x"), ("SEARCH", "CVE...")]
     """
     calls = []
-
-    tool_matches   = re.findall(r'\[TOOL:\s*(.+?)\]',   response)
-    search_matches = re.findall(r'\[SEARCH:\s*(.+?)\]', response)
-
-    for m in tool_matches:
-        calls.append(("TOOL", m.strip()))
-    for m in search_matches:
+    for m in re.findall(r'\[TOOL:\s*(.+?)\]',   response):
+        calls.append(("TOOL",   m.strip()))
+    for m in re.findall(r'\[SEARCH:\s*(.+?)\]', response):
         calls.append(("SEARCH", m.strip()))
-
     return calls
 
 
 def run_tool_calls(calls: list) -> str:
-    """
-    Execute all tool/search calls and return combined results string.
-    """
+    """Chạy tất cả tool/search calls, trả về kết quả gộp."""
     if not calls:
         return ""
 
@@ -149,34 +205,20 @@ def run_tool_calls(calls: list) -> str:
 
 
 # ─────────────────────────────────────────────
-# PARSER — extract structured data from AI output
+# PARSER
 # ─────────────────────────────────────────────
 
 def parse_vulnerabilities(response: str) -> list:
-    """
-    Parse VULN: lines from AI response into dicts.
-    Returns list of vulnerability dicts ready for db.save_vulnerability()
-    """
+    """Parse VULN: lines thành list dict cho db.save_vulnerability()"""
     vulns = []
     lines = response.splitlines()
-
     i = 0
     while i < len(lines):
         line = lines[i].strip()
-
         if line.startswith("VULN:"):
-            vuln = {
-                "vuln_name":   "",
-                "severity":    "medium",
-                "port":        "",
-                "service":     "",
-                "description": "",
-                "fix":         ""
-            }
-
-            # parse header line: VULN: name | SEVERITY: x | PORT: x | SERVICE: x
-            parts = line.split("|")
-            for part in parts:
+            vuln = {"vuln_name": "", "severity": "medium",
+                    "port": "", "service": "", "description": "", "fix": ""}
+            for part in line.split("|"):
                 part = part.strip()
                 if part.startswith("VULN:"):
                     vuln["vuln_name"] = part.replace("VULN:", "").strip()
@@ -187,7 +229,6 @@ def parse_vulnerabilities(response: str) -> list:
                 elif part.startswith("SERVICE:"):
                     vuln["service"] = part.replace("SERVICE:", "").strip()
 
-            # look ahead for DESC: and FIX: lines
             j = i + 1
             while j < len(lines) and j <= i + 5:
                 next_line = lines[j].strip()
@@ -199,35 +240,21 @@ def parse_vulnerabilities(response: str) -> list:
 
             if vuln["vuln_name"]:
                 vulns.append(vuln)
-
         i += 1
-
     return vulns
 
 
 def parse_exploits(response: str) -> list:
-    """
-    Parse EXPLOIT: lines from AI response into dicts.
-    Returns list of exploit dicts ready for db.save_exploit()
-    """
+    """Parse EXPLOIT: lines thành list dict cho db.save_exploit()"""
     exploits = []
     lines = response.splitlines()
-
     i = 0
     while i < len(lines):
         line = lines[i].strip()
-
         if line.startswith("EXPLOIT:"):
-            exploit = {
-                "exploit_name": "",
-                "tool_used":    "",
-                "payload":      "",
-                "result":       "unknown",
-                "notes":        ""
-            }
-
-            parts = line.split("|")
-            for part in parts:
+            exploit = {"exploit_name": "", "tool_used": "",
+                       "payload": "", "result": "unknown", "notes": ""}
+            for part in line.split("|"):
                 part = part.strip()
                 if part.startswith("EXPLOIT:"):
                     exploit["exploit_name"] = part.replace("EXPLOIT:", "").strip()
@@ -247,47 +274,33 @@ def parse_exploits(response: str) -> list:
 
             if exploit["exploit_name"]:
                 exploits.append(exploit)
-
         i += 1
-
     return exploits
 
 
 def parse_risk_level(response: str) -> str:
-    """Extract RISK_LEVEL from AI response."""
     match = re.search(r'RISK_LEVEL:\s*(CRITICAL|HIGH|MEDIUM|LOW)', response, re.IGNORECASE)
     return match.group(1).upper() if match else "UNKNOWN"
 
 
 def parse_summary(response: str) -> str:
-    """Extract SUMMARY line from AI response."""
     match = re.search(r'SUMMARY:\s*(.+)', response, re.IGNORECASE)
     return match.group(1).strip() if match else response[:500]
 
 
 # ─────────────────────────────────────────────
-# MAIN ANALYSIS FUNCTION
+# MAIN ANALYSIS
 # ─────────────────────────────────────────────
 
 def analyse_target(target: str, raw_scan: str) -> dict:
     """
-    Full analysis pipeline:
-    1. Build initial prompt with scan data
-    2. Send to OpenRouter model
-    3. Run tool dispatch loop if AI requests tools
-    4. Parse structured output
-    5. Return everything ready for db.py to save
-
-    Returns dict with:
-      - full_response   : complete AI text
-      - vulnerabilities : list of parsed vuln dicts
-      - exploits        : list of parsed exploit dicts
-      - risk_level      : CRITICAL/HIGH/MEDIUM/LOW
-      - summary         : short summary text
-      - raw_scan        : original scan dump
+    Pipeline phân tích đầy đủ:
+    1. Build prompt với recon data
+    2. Gọi LLM (local hoặc cloud)
+    3. Dispatch tool calls nếu AI yêu cầu
+    4. Parse kết quả có cấu trúc
+    5. Trả về dict sẵn sàng lưu DB
     """
-
-    # ── Step 1: initial prompt ──────────────────
     initial_prompt = f"""TARGET: {target}
 
 RECON DATA:
@@ -302,36 +315,30 @@ Remember: only use IPs/domains from the RECON DATA above.
     best_response     = ""
     best_vuln_count   = 0
 
-    # ── Step 2: tool dispatch loop ──────────────
     for loop in range(MAX_TOOL_LOOPS):
-        response = ask_openrouter(full_conversation)
+        response = ask_llm(full_conversation)
 
         print(f"\n{'─'*60}")
-        print(f"[METATRON - Round {loop + 1}]")
+        print(f"[METATRON - Round {loop + 1}] (backend: {LLM_BACKEND})")
         print(f"{'─'*60}")
         print(response)
 
-        # track the response with most parsed vulns (không mất kết quả tốt)
         vuln_count = len(parse_vulnerabilities(response))
         if vuln_count >= best_vuln_count:
             best_vuln_count = vuln_count
             best_response   = response
 
-        # stop if error from API
         if response.startswith("[!]"):
-            print("\n[!] API error — stopping loop.")
+            print("\n[!] Backend error — stopping loop.")
             break
 
-        # check for tool calls
         tool_calls = extract_tool_calls(response)
         if not tool_calls:
             print("\n[*] No tool calls. Analysis complete.")
             break
 
-        # run all tool calls
         tool_results = run_tool_calls(tool_calls)
 
-        # feed results back into conversation
         full_conversation = (
             f"{full_conversation}\n\n"
             f"[YOUR PREVIOUS RESPONSE]\n{response}\n\n"
@@ -340,10 +347,7 @@ Remember: only use IPs/domains from the RECON DATA above.
             f"If analysis is complete, give the final RISK_LEVEL and SUMMARY."
         )
 
-    # dùng best_response thay vì chỉ lấy round cuối
     final_response  = best_response or response
-
-    # ── Step 3: parse structured output ─────────
     vulnerabilities = parse_vulnerabilities(final_response)
     exploits        = parse_exploits(final_response)
     risk_level      = parse_risk_level(final_response)
@@ -366,14 +370,19 @@ Remember: only use IPs/domains from the RECON DATA above.
 # ─────────────────────────────────────────────
 
 if __name__ == "__main__":
-    print("[ llm.py test — OpenRouter direct query ]\n")
+    print(f"[ llm.py test | backend: {LLM_BACKEND} ]\n")
 
-    if not os.environ.get("OPENROUTER_API_KEY"):
+    if LLM_BACKEND == "openrouter" and not os.environ.get("OPENROUTER_API_KEY"):
         print("[!] Set your API key first:")
         print("    export OPENROUTER_API_KEY=sk-or-v1-...")
         exit(1)
 
-    print(f"[+] Using model: {OPENROUTER_MODEL}")
+    if LLM_BACKEND == "local":
+        print(f"[+] Using Ollama model: {OLLAMA_MODEL}")
+        print(f"[+] Ollama URL: {OLLAMA_URL}")
+    else:
+        print(f"[+] Using OpenRouter model: {OPENROUTER_MODEL}")
+
     target    = input("Test target: ").strip()
     test_scan = f"Test recon for {target} — nmap and whois data would appear here."
     result    = analyse_target(target, test_scan)
