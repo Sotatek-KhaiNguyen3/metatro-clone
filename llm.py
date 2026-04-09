@@ -35,7 +35,7 @@ _openrouter_client = OpenAI(
 OLLAMA_MODEL   = os.environ.get("OLLAMA_MODEL", "metatron-qwen")
 OLLAMA_URL     = os.environ.get("OLLAMA_URL",   "http://localhost:11434/api/generate")
 
-MAX_TOKENS     = 4096
+MAX_TOKENS     = 2048
 MAX_TOOL_LOOPS = 5
 
 
@@ -97,7 +97,7 @@ def ask_ollama(prompt: str) -> str:
                 "temperature": 0.7,
             }
         }
-        resp = requests.post(OLLAMA_URL, json=payload, timeout=600)
+        resp = requests.post(OLLAMA_URL, json=payload, timeout=1200)
         resp.raise_for_status()
         return resp.json().get("response", "").strip()
 
