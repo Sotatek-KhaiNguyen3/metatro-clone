@@ -32,7 +32,7 @@ _openrouter_client = OpenAI(
 )
 
 # Ollama local
-OLLAMA_MODEL   = os.environ.get("OLLAMA_MODEL", "metatron-qwen")
+OLLAMA_MODEL   = os.environ.get("OLLAMA_MODEL", "huihui_ai/qwen3.5-abliterated:9b")
 OLLAMA_URL     = os.environ.get("OLLAMA_URL",   "http://localhost:11434/api/generate")
 
 MAX_TOKENS     = 2048
@@ -90,7 +90,7 @@ def ask_ollama(prompt: str) -> str:
         print(f"\n[*] Sending to Ollama ({OLLAMA_MODEL})...")
         payload = {
             "model":  OLLAMA_MODEL,
-            "prompt": f"{SYSTEM_PROMPT}\n\n{prompt}",
+            "prompt": f"/no_think\n{SYSTEM_PROMPT}\n\n{prompt}",
             "stream": False,
             "options": {
                 "num_predict": MAX_TOKENS,
