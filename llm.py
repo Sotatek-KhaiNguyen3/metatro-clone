@@ -97,7 +97,7 @@ def ask_ollama(prompt: str) -> str:
                 "temperature": 0.7,
             }
         }
-        resp = requests.post(OLLAMA_URL, json=payload, timeout=1200)
+        resp = requests.post(OLLAMA_URL, json=payload, timeout=3600)
         resp.raise_for_status()
         return resp.json().get("response", "").strip()
 
