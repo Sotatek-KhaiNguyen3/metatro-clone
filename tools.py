@@ -55,8 +55,8 @@ def _build_url(target: str) -> str:
 
 def run_nmap(target: str) -> str:
     """nmap -sV -sC -T4 --open — port/service/version detection"""
-    print(f"  [*] nmap -sV -sC -T4 --open {target}")
-    return run_tool(["nmap", "-sV", "-sC", "-T4", "--open", target], timeout=180)
+    print(f"  [*] nmap -Pn -sV -sC -T4 --open {target}")
+    return run_tool(["nmap", "-Pn", "-sV", "-sC", "-T4", "--open", target], timeout=180)
 
 
 def run_whatweb(target: str) -> str:

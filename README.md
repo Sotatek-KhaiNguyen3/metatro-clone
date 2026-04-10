@@ -8,8 +8,9 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.x-blue?style=for-the-badge&logo=python"/>
   <img src="https://img.shields.io/badge/OS-Parrot%20Linux-green?style=for-the-badge&logo=linux"/>
-  <img src="https://img.shields.io/badge/AI-Llama%203.3%2070B-red?style=for-the-badge"/>
+  <img src="https://img.shields.io/badge/AI-DeepSeek%20V3.2-red?style=for-the-badge"/>
   <img src="https://img.shields.io/badge/API-OpenRouter-purple?style=for-the-badge"/>
+  <img src="https://img.shields.io/badge/Local-Ollama-lightgrey?style=for-the-badge"/>
   <img src="https://img.shields.io/badge/DB-MariaDB-orange?style=for-the-badge&logo=mariadb"/>
   <img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge"/>
 </p>
@@ -18,18 +19,20 @@
 
 ## 📌 METATRON là gì?
 
-**METATRON** là công cụ pentest tích hợp AI chạy trên CLI. Nhập một IP hoặc domain mục tiêu — METATRON tự động chạy các công cụ recon thực (nmap, whois, whatweb, curl, dig, nikto), đưa toàn bộ kết quả cho AI phân tích qua **OpenRouter**, phát hiện lỗ hổng, đề xuất exploit và khuyến nghị cách vá. Mọi kết quả được lưu vào MariaDB với lịch sử scan đầy đủ.
+**METATRON** là công cụ pentest tích hợp AI chạy trên CLI. Nhập một IP hoặc domain mục tiêu — METATRON tự động chạy pipeline recon thực (nmap, whatweb, curl, gobuster, nuclei, katana, ffuf...), đưa toàn bộ kết quả cho AI phân tích, phát hiện lỗ hổng có bằng chứng thực tế (không phải AI đoán), đề xuất exploit và khuyến nghị cách vá. Hỗ trợ 2 backend: **OpenRouter** (cloud, không cần GPU) và **Ollama** (local model). Mọi kết quả được lưu vào MariaDB với lịch sử scan đầy đủ.
 
 ---
 
 ## ✨ Tính năng
 
-- 🤖 **Phân tích AI** — dùng `Llama 3.3 70B` qua OpenRouter (có gói miễn phí)
-- 🔍 **Recon tự động** — nmap, whois, whatweb, curl headers, dig DNS, nikto
+- 🤖 **Dual backend AI** — OpenRouter (cloud) hoặc Ollama (local), đổi bằng 1 biến môi trường
+- 🔍 **Web app pentest pipeline** — nmap → whatweb → curl → gobuster → nuclei (mặc định)
+- 🕷️ **Spider & Fuzz** — katana (crawl toàn bộ endpoint), ffuf (fuzz parameter tìm SQLi/LFI)
+- ✅ **Evidence-based** — nuclei verify CVE thật bằng template, không phải AI đoán
 - 🌐 **Tìm kiếm web** — DuckDuckGo + tra cứu CVE (không cần API key thêm)
 - 🗄️ **MariaDB Backend** — lịch sử scan đầy đủ với 5 bảng liên kết
 - ✏️ **Sửa / Xóa** — chỉnh sửa bất kỳ kết quả nào trực tiếp từ CLI
-- 🔁 **Vòng lặp agentic** — AI có thể tự yêu cầu chạy thêm tool giữa chừng
+- 🔁 **Vòng lặp agentic** — AI có thể tự yêu cầu chạy thêm tool (gobuster, nuclei, katana...) giữa chừng
 - 📤 **Xuất báo cáo** — PDF và HTML từ **[2] Xem lịch sử**
 
 ---
@@ -65,14 +68,15 @@
 
 ## 🧱 Tech Stack
 
-| Thành phần | Công nghệ                             |
-|------------|---------------------------------------|
-| Ngôn ngữ   | Python 3                              |
-| Model AI   | Llama 3.3 70B Instruct (miễn phí)     |
-| LLM API    | OpenRouter (`openrouter.ai`)          |
-| Database   | MariaDB                               |
-| OS         | Parrot OS / Kali Linux (Debian-based) |
-| Tìm kiếm   | DuckDuckGo (miễn phí, không cần key) |
+| Thành phần    | Công nghệ                                          |
+|---------------|----------------------------------------------------|
+| Ngôn ngữ      | Python 3                                           |
+| Backend cloud | OpenRouter — DeepSeek V3.2 / Claude Haiku (mặc định) |
+| Backend local | Ollama — huihui_ai/qwen3.5-abliterated:9b          |
+| Database      | MariaDB                                            |
+| OS            | Parrot OS / Kali Linux (Debian-based)              |
+| Tìm kiếm      | DuckDuckGo (miễn phí, không cần key)              |
+| Tools recon   | nmap, whatweb, curl, gobuster, nuclei, katana, ffuf |
 
 ---
 
@@ -115,52 +119,101 @@ pip install -r requirements.txt
 ### 4. Cài system tools
 
 ```bash
-sudo apt install -y nmap nikto whatweb whois dnsutils curl
+# Core (bắt buộc)
+sudo apt install -y nmap whatweb curl nikto
+
+# gobuster và ffuf
+sudo apt install -y gobuster ffuf
+
+# nuclei (Go binary)
+go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
+nuclei -update-templates
+
+# katana (Go binary — cần Go 1.21+)
+go install github.com/projectdiscovery/katana/cmd/katana@latest
 ```
+
+> **Lưu ý:** nuclei và katana yêu cầu Go. Cài Go trên Parrot/Kali:
+> ```bash
+> sudo apt install -y golang-go
+> export PATH=$PATH:$(go env GOPATH)/bin
+> echo 'export PATH=$PATH:$(go env GOPATH)/bin' >> ~/.bashrc
+> ```
 
 ---
 
-## 🤖 Cài đặt AI — OpenRouter API
+## 🤖 Cài đặt AI — Chọn backend
 
-METATRON dùng **OpenRouter** để truy cập Llama 3.3 70B miễn phí — không cần GPU, không cần tải model về máy.
+METATRON hỗ trợ 2 backend, chọn bằng biến môi trường `LLM_BACKEND`.
 
-### Bước 1 — Lấy API key
+---
+
+### Option A — OpenRouter (cloud, khuyến nghị)
+
+Không cần GPU, không cần tải model. Chỉ cần API key.
+
+**Bước 1 — Lấy API key**
 
 1. Vào [openrouter.ai](https://openrouter.ai) → đăng ký (dùng Google được)
 2. Vào **Keys** → **Create Key**
 3. Copy key (`sk-or-v1-...`)
 
-### Bước 2 — Set API key
+**Bước 2 — Set biến môi trường**
 
 ```bash
+export LLM_BACKEND=openrouter
 export OPENROUTER_API_KEY=sk-or-v1-xxxxxxxxxxxx
+# OPENROUTER_MODEL mặc định là deepseek/deepseek-v3.2, không cần export trừ khi muốn đổi model
 ```
 
-Hoặc thêm vào `.bashrc` / `.zshrc` để giữ qua các phiên:
+Thêm vào `~/.bashrc` để giữ qua các phiên:
 
 ```bash
+echo 'export LLM_BACKEND=openrouter' >> ~/.bashrc
 echo 'export OPENROUTER_API_KEY=sk-or-v1-xxxxxxxxxxxx' >> ~/.bashrc
 source ~/.bashrc
 ```
 
-### Bước 3 — Kiểm tra
+**Các model đề xuất:**
+
+| Model | Chất lượng | Chi phí |
+|-------|------------|---------|
+| `deepseek/deepseek-v3.2` | Tốt nhất, tự sửa hallucination | ~$0.01/scan |
+| `anthropic/claude-haiku-4-5` | Nhiều vuln nhất (14/scan), nhanh | ~$0.063/scan |
+| `meta-llama/llama-3.3-70b-instruct:free` | Miễn phí | Có rate limit |
+
+---
+
+### Option B — Ollama (local model)
+
+Cần máy đủ RAM (≥16 GB cho model 9B). Không cần internet sau khi tải.
 
 ```bash
-python llm.py
-# Nhập target test khi được hỏi — sẽ có kết quả trong vài giây
+# Cài Ollama
+curl -fsSL https://ollama.com/install.sh | sh
+
+# Tải model
+ollama pull huihui_ai/qwen3.5-abliterated:9b
+
+# Build Modelfile (đã có trong repo)
+ollama create metatron-qwen -f Modelfile
+
+# Set backend
+export LLM_BACKEND=local
+export OLLAMA_MODEL=huihui_ai/qwen3.5-abliterated:9b
+export OLLAMA_URL=http://localhost:11434/api/generate
 ```
 
-**Các free model có thể dùng** (set trong `llm.py` → `OPENROUTER_MODEL`):
+> **Lưu ý:** CPU-only inference rất chậm (~4-5 token/s). Cần GPU để dùng được trong thực tế.
 
-| Model | Chất lượng | Ghi chú |
-|-------|------------|---------|
-| `meta-llama/llama-3.3-70b-instruct:free` | Tốt nhất trong free | Mặc định |
-| `google/gemma-3-27b-it:free` | Tốt | Nhanh hơn |
-| `deepseek/deepseek-r1:free` | Reasoning tốt | Chậm hơn |
+---
 
-Để đổi model, sửa 1 dòng trong `llm.py`:
-```python
-OPENROUTER_MODEL = "meta-llama/llama-3.3-70b-instruct:free"
+### Kiểm tra
+
+```bash
+source venv/bin/activate
+python llm.py
+# Nhập target test khi được hỏi
 ```
 
 ---
@@ -328,7 +381,14 @@ Chọn **[1] New Scan** → nhập IP public của EC2 → chọn tool recon →
 ```bash
 cd METATRON
 source venv/bin/activate
+
+# OpenRouter (cloud)
+export LLM_BACKEND=openrouter
 export OPENROUTER_API_KEY=sk-or-v1-...
+
+# hoặc Ollama (local)
+# export LLM_BACKEND=local
+
 python metatron.py
 ```
 
@@ -348,14 +408,22 @@ python metatron.py
 
 **3. Chọn tool recon:**
 ```
+  [ SELECT TOOLS TO RUN ]
+  ── Core ──────────────────────────────
   [1] nmap
-  [2] whois
-  [3] whatweb
-  [4] curl headers
-  [5] dig DNS
+  [2] whatweb
+  [3] curl headers
+  [4] gobuster
+  [5] nuclei
+  ── Optional ──────────────────────────
   [6] nikto
-  [a] Chạy tất cả (trừ nikto)
-  [n] Chạy tất cả + nikto (chậm hơn)
+  [7] katana (spider)
+  [8] ffuf (fuzz)
+  [9] whois
+  [0] dig DNS
+  ── Presets ───────────────────────────
+  [a] Default  (nmap + whatweb + curl + gobuster + nuclei)
+  [f] Full     (default + nikto + katana + ffuf)
 ```
 
 **4.** METATRON chạy các tool, đưa kết quả cho AI, in ra phân tích.
