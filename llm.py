@@ -25,7 +25,7 @@ from search import handle_search_dispatch
 LLM_BACKEND = os.environ.get("LLM_BACKEND", "openrouter").lower()
 
 # OpenRouter
-OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "anthropic/claude-haiku-4-5")
+OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "deepseek/deepseek-v3.2")
 _openrouter_client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=os.environ.get("OPENROUTER_API_KEY", ""),
