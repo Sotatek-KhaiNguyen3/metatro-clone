@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
 METATRON - tools.py
-Recon tool runners — all output returned as strings to feed into the LLM.
-Tools used: nmap, whois, whatweb, curl, dig, nikto
-OS: Parrot OS (all these tools are pre-installed or easily available)
+Web app pentest tool runners — output returned as strings to feed into the LLM.
+
+Default recon pipeline: nmap → whatweb → curl → gobuster → nuclei
+Optional:              nikto, katana, ffuf, whois, dig
 """
 
 import subprocess
@@ -14,10 +15,6 @@ import subprocess
 # ─────────────────────────────────────────────
 
 def run_tool(command: list, timeout: int = 120) -> str:
-    """
-    Execute a shell command, return combined stdout + stderr as string.
-    Never crashes the program — always returns something.
-    """
     try:
         result = subprocess.run(
             command,
@@ -40,146 +37,205 @@ def run_tool(command: list, timeout: int = 120) -> str:
     except subprocess.TimeoutExpired:
         return f"[!] Timed out after {timeout}s: {' '.join(command)}"
     except FileNotFoundError:
-        return f"[!] Tool not found: {command[0]} — install it with: sudo apt install {command[0]}"
+        return f"[!] Tool not found: {command[0]} — install: sudo apt install {command[0]}"
     except Exception as e:
-        return f"[!] Unexpected error running {command[0]}: {e}"
+        return f"[!] Error running {command[0]}: {e}"
+
+
+def _build_url(target: str) -> str:
+    """Ensure target has http:// prefix for web tools."""
+    if target.startswith("http://") or target.startswith("https://"):
+        return target
+    return f"http://{target}"
 
 
 # ─────────────────────────────────────────────
-# INDIVIDUAL TOOLS
+# CORE TOOLS (default pipeline)
 # ─────────────────────────────────────────────
 
 def run_nmap(target: str) -> str:
-    """
-    nmap -sV -sC -T4 --open
-    -sV  : detect service versions
-    -sC  : run default scripts (basic vuln checks)
-    -T4  : aggressive timing (faster)
-    --open : only show open ports
-    """
+    """nmap -sV -sC -T4 --open — port/service/version detection"""
     print(f"  [*] nmap -sV -sC -T4 --open {target}")
     return run_tool(["nmap", "-sV", "-sC", "-T4", "--open", target], timeout=180)
 
 
-def run_whois(target: str) -> str:
-    """
-    whois — domain registration, registrar, IP ownership info
-    """
-    print(f"  [*] whois {target}")
-    return run_tool(["whois", target], timeout=30)
-
-
 def run_whatweb(target: str) -> str:
-    """
-    whatweb -a 3 — fingerprint web technologies, CMS, frameworks, headers
-    -a 3 : aggression level 3 (active but not destructive)
-    """
-    print(f"  [*] whatweb -a 3 {target}")
-    return run_tool(["whatweb", "-a", "3", target], timeout=60)
+    """whatweb -a 3 — tech stack, CMS, framework fingerprint"""
+    url = _build_url(target)
+    print(f"  [*] whatweb -a 3 {url}")
+    return run_tool(["whatweb", "-a", "3", url], timeout=60)
 
 
 def run_curl_headers(target: str) -> str:
-    """
-    curl -sI — fetch HTTP headers only
-    Reveals: server software, X-Powered-By, cookies, security headers (or lack of them)
-    """
-    print(f"  [*] curl -sI http://{target}")
-    output = run_tool([
-        "curl", "-sI",
-        "--max-time", "10",
-        "--location",          # follow redirects
-        f"http://{target}"
+    """curl -sI — HTTP headers, security headers, server info"""
+    url = _build_url(target)
+    print(f"  [*] curl -sI {url}")
+    http_out = run_tool([
+        "curl", "-sI", "--max-time", "10", "--location", url
     ], timeout=20)
-
-    # also try https
-    https_output = run_tool([
-        "curl", "-sI",
-        "--max-time", "10",
-        "--location",
-        "-k",                  # ignore cert errors
-        f"https://{target}"
+    https_out = run_tool([
+        "curl", "-sI", "--max-time", "10", "--location", "-k",
+        url.replace("http://", "https://")
     ], timeout=20)
+    return f"[HTTP Headers]\n{http_out}\n\n[HTTPS Headers]\n{https_out}"
 
-    return f"[HTTP Headers]\n{output}\n\n[HTTPS Headers]\n{https_output}"
+
+def run_gobuster(target: str) -> str:
+    """
+    gobuster dir — brute-force directories and files.
+    Wordlist: /usr/share/wordlists/dirb/common.txt (pre-installed Parrot/Kali)
+    """
+    url = _build_url(target)
+    wordlist = "/usr/share/wordlists/dirb/common.txt"
+    print(f"  [*] gobuster dir -u {url} -w {wordlist}")
+    return run_tool([
+        "gobuster", "dir",
+        "-u", url,
+        "-w", wordlist,
+        "-t", "50",
+        "--timeout", "10s",
+        "-q",                   # quiet: no banner
+        "--no-error",
+    ], timeout=300)
+
+
+def run_nuclei(target: str) -> str:
+    """
+    nuclei — CVE/misconfiguration scanner with community templates.
+    Scans for critical and high severity only (fast mode).
+    Run 'nuclei -update-templates' first if templates missing.
+    """
+    url = _build_url(target)
+    print(f"  [*] nuclei -u {url} -severity critical,high,medium")
+    return run_tool([
+        "nuclei",
+        "-u", url,
+        "-severity", "critical,high,medium",
+        "-silent",
+        "-no-color",
+        "-timeout", "10",
+    ], timeout=600)
+
+
+# ─────────────────────────────────────────────
+# OPTIONAL TOOLS
+# ─────────────────────────────────────────────
+
+def run_nikto(target: str) -> str:
+    """nikto -h — web server misconfig, outdated software (slow/noisy)"""
+    url = _build_url(target)
+    print(f"  [*] nikto -h {url}  (this may take a while...)")
+    return run_tool(["nikto", "-h", url, "-nointeractive"], timeout=300)
+
+
+def run_katana(target: str) -> str:
+    """
+    katana — fast web crawler/spider.
+    Discovers endpoints, forms, JS links up to depth 3.
+    Install: go install github.com/projectdiscovery/katana/cmd/katana@latest
+    """
+    url = _build_url(target)
+    print(f"  [*] katana -u {url} -d 3")
+    return run_tool([
+        "katana",
+        "-u", url,
+        "-d", "3",
+        "-silent",
+        "-no-color",
+        "-timeout", "10",
+    ], timeout=300)
+
+
+def run_ffuf(target: str) -> str:
+    """
+    ffuf — fast web fuzzer for parameter/path discovery.
+    Fuzzes common paths with status filter 200,301,302,403.
+    """
+    url = _build_url(target)
+    wordlist = "/usr/share/wordlists/dirb/common.txt"
+    fuzz_url = f"{url}/FUZZ"
+    print(f"  [*] ffuf -u {fuzz_url} -w {wordlist}")
+    return run_tool([
+        "ffuf",
+        "-u", fuzz_url,
+        "-w", wordlist,
+        "-mc", "200,201,301,302,403",
+        "-t", "50",
+        "-timeout", "10",
+        "-s",                   # silent mode (no banner)
+    ], timeout=300)
+
+
+def run_whois(target: str) -> str:
+    """whois — domain registration info (useful for domain scope recon)"""
+    # strip port if present
+    host = target.split(":")[0]
+    print(f"  [*] whois {host}")
+    return run_tool(["whois", host], timeout=30)
 
 
 def run_dig(target: str) -> str:
-    """
-    dig — DNS records: A, MX, NS, TXT
-    Useful for subdomains, mail servers, SPF/DKIM info
-    """
-    print(f"  [*] dig {target} ANY")
-    a_record  = run_tool(["dig", "+short", "A",   target], timeout=15)
-    mx_record = run_tool(["dig", "+short", "MX",  target], timeout=15)
-    ns_record = run_tool(["dig", "+short", "NS",  target], timeout=15)
-    txt_record= run_tool(["dig", "+short", "TXT", target], timeout=15)
-
+    """dig — DNS records A/MX/NS/TXT (useful for domain scope recon)"""
+    host = target.split(":")[0]
+    print(f"  [*] dig {host}")
+    a   = run_tool(["dig", "+short", "A",   host], timeout=15)
+    mx  = run_tool(["dig", "+short", "MX",  host], timeout=15)
+    ns  = run_tool(["dig", "+short", "NS",  host], timeout=15)
+    txt = run_tool(["dig", "+short", "TXT", host], timeout=15)
     return (
-        f"[A Records]\n{a_record}\n\n"
-        f"[MX Records]\n{mx_record}\n\n"
-        f"[NS Records]\n{ns_record}\n\n"
-        f"[TXT Records]\n{txt_record}"
+        f"[A Records]\n{a}\n\n"
+        f"[MX Records]\n{mx}\n\n"
+        f"[NS Records]\n{ns}\n\n"
+        f"[TXT Records]\n{txt}"
     )
 
 
-def run_nikto(target: str) -> str:
-    """
-    nikto -h — web server vulnerability scanner
-    Checks for outdated software, dangerous files, misconfigurations
-    WARNING: noisy tool, only run with permission
-    """
-    print(f"  [*] nikto -h {target}  (this may take a while...)")
-    return run_tool(["nikto", "-h", target, "-nointeractive"], timeout=300)
-
-
 # ─────────────────────────────────────────────
-# MAIN RECON PIPELINE
+# TOOL MENU
 # ─────────────────────────────────────────────
 
 TOOLS_MENU = {
-    "1": ("nmap",         run_nmap),
-    "2": ("whois",        run_whois),
-    "3": ("whatweb",      run_whatweb),
-    "4": ("curl headers", run_curl_headers),
-    "5": ("dig DNS",      run_dig),
-    "6": ("nikto",        run_nikto),
+    # core
+    "1": ("nmap",            run_nmap),
+    "2": ("whatweb",         run_whatweb),
+    "3": ("curl headers",    run_curl_headers),
+    "4": ("gobuster",        run_gobuster),
+    "5": ("nuclei",          run_nuclei),
+    # optional
+    "6": ("nikto",           run_nikto),
+    "7": ("katana (spider)", run_katana),
+    "8": ("ffuf (fuzz)",     run_ffuf),
+    "9": ("whois",           run_whois),
+    "0": ("dig DNS",         run_dig),
 }
 
+TOOLS_DEFAULT = ["1", "2", "3", "4", "5"]   # run with choice "a"
+
+
+# ─────────────────────────────────────────────
+# PIPELINES
+# ─────────────────────────────────────────────
 
 def run_default_recon(target: str) -> dict:
     """
-    Run the standard recon pipeline (everything except nikto).
-    Returns a dict of {tool_name: output_string}.
-    Nikto is excluded by default — too slow/noisy for auto-run.
+    Standard web app pentest pipeline:
+    nmap → whatweb → curl → gobuster → nuclei
     """
     print(f"\n[*] Starting recon on: {target}")
     print("─" * 50)
 
     results = {}
-    results["nmap"]         = run_nmap(target)
-    results["whois"]        = run_whois(target)
-    results["whatweb"]      = run_whatweb(target)
-    results["curl_headers"] = run_curl_headers(target)
-    results["dig"]          = run_dig(target)
+    for key in TOOLS_DEFAULT:
+        name, func = TOOLS_MENU[key]
+        results[name] = func(target)
 
     print("─" * 50)
     print("[+] Recon complete.\n")
     return results
 
 
-def run_single_tool(tool_key: str, target: str) -> str:
-    """Run one tool by its menu key. Used by AI tool dispatch."""
-    if tool_key in TOOLS_MENU:
-        name, func = TOOLS_MENU[tool_key]
-        return func(target)
-    return f"[!] Unknown tool key: {tool_key}"
-
-
 def format_recon_for_llm(results: dict) -> str:
-    """
-    Flatten the recon results dict into one clean string
-    to paste into the LLM prompt.
-    """
+    """Flatten recon results dict into one string for the LLM prompt."""
     output = ""
     for tool, data in results.items():
         output += f"\n{'='*50}\n"
@@ -191,15 +247,14 @@ def format_recon_for_llm(results: dict) -> str:
 
 def run_tool_by_command(command_str: str) -> str:
     """
-    Called by LLM tool dispatch when AI writes [TOOL: nmap -sV 1.2.3.4].
+    Called by LLM tool dispatch when AI writes [TOOL: gobuster dir -u http://x].
     Splits the string and runs it safely.
     """
     parts = command_str.strip().split()
     if not parts:
         return "[!] Empty command."
 
-    # safety check — block destructive commands
-    blocked = ["rm", "dd", "mkfs", "shutdown", "reboot", "wget", "curl -o", "chmod"]
+    blocked = ["rm", "dd", "mkfs", "shutdown", "reboot", "wget", "chmod"]
     if parts[0] in blocked:
         return f"[!] Blocked command: {parts[0]}"
 
@@ -207,19 +262,23 @@ def run_tool_by_command(command_str: str) -> str:
 
 
 # ─────────────────────────────────────────────
-# INTERACTIVE TOOL SELECTOR (called from CLI)
+# INTERACTIVE SELECTOR
 # ─────────────────────────────────────────────
 
 def interactive_tool_run(target: str) -> str:
-    """
-    Let user manually pick which tools to run.
-    Returns combined output string.
-    """
+    """Let user pick which tools to run. Returns combined output string."""
     print("\n[ SELECT TOOLS TO RUN ]")
-    for key, (name, _) in TOOLS_MENU.items():
+    print("  ── Core ──────────────────────────────")
+    for key in TOOLS_DEFAULT:
+        name, _ = TOOLS_MENU[key]
         print(f"  [{key}] {name}")
-    print("  [a] Run all (except nikto)")
-    print("  [n] Run all + nikto (slow)")
+    print("  ── Optional ──────────────────────────")
+    for key in ["6", "7", "8", "9", "0"]:
+        name, _ = TOOLS_MENU[key]
+        print(f"  [{key}] {name}")
+    print("  ── Presets ───────────────────────────")
+    print("  [a] Default (nmap+whatweb+curl+gobuster+nuclei)")
+    print("  [f] Full    (default + nikto + katana + ffuf)")
 
     choice = input("\nChoice(s) e.g. 1 2 4 or a: ").strip().lower()
 
@@ -227,9 +286,11 @@ def interactive_tool_run(target: str) -> str:
         results = run_default_recon(target)
         return format_recon_for_llm(results)
 
-    if choice == "n":
+    if choice == "f":
         results = run_default_recon(target)
-        results["nikto"] = run_nikto(target)
+        results["nikto"]  = run_nikto(target)
+        results["katana"] = run_katana(target)
+        results["ffuf"]   = run_ffuf(target)
         return format_recon_for_llm(results)
 
     combined = {}
@@ -249,6 +310,6 @@ def interactive_tool_run(target: str) -> str:
 # ─────────────────────────────────────────────
 
 if __name__ == "__main__":
-    target = input("Enter test target (IP or domain): ").strip()
+    target = input("Enter test target (IP:port or domain): ").strip()
     results = run_default_recon(target)
     print(format_recon_for_llm(results))
