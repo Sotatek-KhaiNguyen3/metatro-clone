@@ -8,6 +8,12 @@ Optional:              nikto, katana, ffuf, whois, dig
 """
 
 import subprocess
+try:
+    from bypass import detect_cloudflare, run_bypass_recon, get_cf_session, \
+                       run_nuclei_bypass, run_ffuf_bypass, run_headers_bypass
+    BYPASS_AVAILABLE = True
+except ImportError:
+    BYPASS_AVAILABLE = False
 
 
 # ─────────────────────────────────────────────
@@ -220,9 +226,30 @@ def run_default_recon(target: str) -> dict:
     """
     Standard web app pentest pipeline:
     nmap → whatweb → curl → gobuster → nuclei
+
+    If Cloudflare is detected, automatically switches to bypass mode:
+    FlareSolverr → curl-impersonate → nuclei+cookie → ffuf+cookie
     """
     print(f"\n[*] Starting recon on: {target}")
     print("─" * 50)
+
+    # Auto-detect Cloudflare and switch to bypass mode
+    if BYPASS_AVAILABLE and detect_cloudflare(target):
+        print("  [!] Cloudflare detected — switching to bypass mode")
+        print("  [*] Requires FlareSolverr running on localhost:8191")
+        cf_session = get_cf_session(target)
+        if cf_session:
+            results = {}
+            results["nmap"]            = run_nmap(target)
+            results["whatweb"]         = run_whatweb(target)
+            results["curl_bypass"]     = run_headers_bypass(target, cf_session)
+            results["nuclei_bypass"]   = run_nuclei_bypass(target, cf_session)
+            results["ffuf_bypass"]     = run_ffuf_bypass(target, cf_session)
+            print("─" * 50)
+            print("[+] Recon complete (CF bypass mode).\n")
+            return results
+        else:
+            print("  [!] FlareSolverr unavailable — falling back to standard recon")
 
     results = {}
     for key in TOOLS_DEFAULT:
@@ -279,6 +306,7 @@ def interactive_tool_run(target: str) -> str:
     print("  ── Presets ───────────────────────────")
     print("  [a] Default (nmap+whatweb+curl+gobuster+nuclei)")
     print("  [f] Full    (default + nikto + katana + ffuf)")
+    print("  [b] Bypass  (CF bypass: FlareSolverr + curl-impersonate + nuclei + ffuf)")
 
     choice = input("\nChoice(s) e.g. 1 2 4 or a: ").strip().lower()
 
@@ -290,7 +318,22 @@ def interactive_tool_run(target: str) -> str:
         results = run_default_recon(target)
         results["nikto"]  = run_nikto(target)
         results["katana"] = run_katana(target)
-        results["ffuf"]   = run_ffuf(target)
+        if "ffuf_bypass" not in results:   # skip if bypass already ran ffuf
+            results["ffuf"] = run_ffuf(target)
+        return format_recon_for_llm(results)
+
+    if choice == "b":
+        if not BYPASS_AVAILABLE:
+            print("[!] bypass.py not found")
+            return ""
+        cf_session = get_cf_session(target)
+        if not cf_session:
+            return "[!] FlareSolverr failed"
+        results = {}
+        results["nmap"]          = run_nmap(target)
+        results["curl_bypass"]   = run_headers_bypass(target, cf_session)
+        results["nuclei_bypass"] = run_nuclei_bypass(target, cf_session)
+        results["ffuf_bypass"]   = run_ffuf_bypass(target, cf_session)
         return format_recon_for_llm(results)
 
     combined = {}

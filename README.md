@@ -125,20 +125,65 @@ sudo apt install -y nmap whatweb curl nikto
 # gobuster và ffuf
 sudo apt install -y gobuster ffuf
 
-# nuclei (Go binary)
+# nuclei và katana (Go binary — cần Go 1.21+)
+sudo apt install -y golang-go
+export PATH=$PATH:$(go env GOPATH)/bin
+echo 'export PATH=$PATH:$(go env GOPATH)/bin' >> ~/.bashrc
+source ~/.bashrc
+
 go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
 nuclei -update-templates
-
-# katana (Go binary — cần Go 1.21+)
 go install github.com/projectdiscovery/katana/cmd/katana@latest
 ```
 
-> **Lưu ý:** nuclei và katana yêu cầu Go. Cài Go trên Parrot/Kali:
-> ```bash
-> sudo apt install -y golang-go
-> export PATH=$PATH:$(go env GOPATH)/bin
-> echo 'export PATH=$PATH:$(go env GOPATH)/bin' >> ~/.bashrc
-> ```
+### 5. Cài Cloudflare Bypass (tùy chọn — cần khi target dùng CF WAF)
+
+**Bước 5.1 — FlareSolverr** (giải JS challenge, lấy `cf_clearance`):
+
+```bash
+docker run -d \
+  --name=flaresolverr \
+  -p 8191:8191 \
+  -e LOG_LEVEL=info \
+  --restart unless-stopped \
+  ghcr.io/flaresolverr/flaresolverr:latest
+```
+
+Verify:
+```bash
+docker logs flaresolverr | grep "ready"
+# FlareSolverr is ready!
+```
+
+**Bước 5.2 — curl-impersonate** (mimic Chrome TLS fingerprint, bypass JA3 detection):
+
+```bash
+# Debian/Ubuntu/Parrot/Kali
+wget https://github.com/lwthiker/curl-impersonate/releases/latest/download/curl-impersonate-chrome.x86_64-linux-gnu.tar.gz
+tar -xzf curl-impersonate-chrome.x86_64-linux-gnu.tar.gz
+sudo mv curl_chrome* /usr/local/bin/
+```
+
+Verify:
+```bash
+curl_chrome120 --version
+```
+
+**Cách dùng trong METATRON:**
+
+Khi scan target có Cloudflare, METATRON tự động detect và hỏi bypass. Hoặc chọn preset `[b]` trong tool menu:
+
+```
+  [b] Bypass  (CF bypass: FlareSolverr + curl-impersonate + nuclei + ffuf)
+```
+
+Pipeline bypass:
+```
+FlareSolverr → cf_clearance cookie
+curl-impersonate → headers (Chrome TLS fingerprint)
+nuclei -H "Cookie: cf_clearance=..." → CVE scan
+ffuf -H "Cookie: cf_clearance=..." → dir brute-force
+```
 
 ---
 
