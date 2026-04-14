@@ -20,7 +20,7 @@ import requests
 FLARESOLVERR_URL = os.environ.get("FLARESOLVERR_URL", "http://localhost:8191/v1")
 
 # curl-impersonate binary — tries chrome120 first, falls back to chrome
-CURL_IMPERSONATE = os.environ.get("CURL_IMPERSONATE_BIN", "curl_chrome120")
+CURL_IMPERSONATE = os.environ.get("CURL_IMPERSONATE_BIN", "curl-impersonate-chrome")
 
 
 # ─────────────────────────────────────────────
