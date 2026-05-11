@@ -36,8 +36,9 @@ OLLAMA_MODEL   = os.environ.get("OLLAMA_MODEL", "huihui_ai/qwen3.5-abliterated:9
 OLLAMA_URL     = os.environ.get("OLLAMA_URL",   "http://localhost:11434/api/generate")
 
 MAX_TOKENS      = 2048
-MAX_TOOL_LOOPS  = 5
-MAX_SCAN_CHARS  = 12000   # truncate recon data nếu quá dài
+MAX_TOOL_LOOPS  = 2
+MAX_SCAN_CHARS  = 8000    # truncate recon data nếu quá dài
+MAX_CTX_CHARS   = 20000   # truncate full conversation context mỗi loop
 
 
 # ─────────────────────────────────────────────
@@ -358,13 +359,16 @@ Remember: only use IPs/domains from the RECON DATA above.
 
         tool_results = run_tool_calls(tool_calls)
 
-        full_conversation = (
+        next_ctx = (
             f"{full_conversation}\n\n"
             f"[YOUR PREVIOUS RESPONSE]\n{response}\n\n"
             f"[TOOL RESULTS]\n{tool_results}\n\n"
             f"Continue your analysis with this new information. "
             f"If analysis is complete, give the final RISK_LEVEL and SUMMARY."
         )
+        if len(next_ctx) > MAX_CTX_CHARS:
+            next_ctx = next_ctx[-MAX_CTX_CHARS:]
+        full_conversation = next_ctx
 
     final_response  = best_response or response
     vulnerabilities = parse_vulnerabilities(final_response)
