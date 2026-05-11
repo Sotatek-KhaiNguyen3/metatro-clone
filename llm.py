@@ -35,8 +35,9 @@ _openrouter_client = OpenAI(
 OLLAMA_MODEL   = os.environ.get("OLLAMA_MODEL", "huihui_ai/qwen3.5-abliterated:9b")
 OLLAMA_URL     = os.environ.get("OLLAMA_URL",   "http://localhost:11434/api/generate")
 
-MAX_TOKENS     = 2048
-MAX_TOOL_LOOPS = 5
+MAX_TOKENS      = 2048
+MAX_TOOL_LOOPS  = 5
+MAX_SCAN_CHARS  = 12000   # truncate recon data nếu quá dài
 
 
 # ─────────────────────────────────────────────
@@ -158,6 +159,8 @@ def ask_openrouter(prompt: str) -> str:
             return "[!] Rate limit hit. Wait a moment and retry."
         if "503" in err or "502" in err:
             return "[!] OpenRouter unavailable. Try again shortly."
+        if "Expecting value" in err or "JSONDecodeError" in err:
+            return "[!] OpenRouter returned invalid response — prompt may be too large or model unavailable. Try again."
         return f"[!] OpenRouter error: {e}"
 
 
@@ -314,6 +317,9 @@ def analyse_target(target: str, raw_scan: str) -> dict:
     4. Parse kết quả có cấu trúc
     5. Trả về dict sẵn sàng lưu DB
     """
+    if len(raw_scan) > MAX_SCAN_CHARS:
+        raw_scan = raw_scan[:MAX_SCAN_CHARS] + "\n\n[... truncated — data too large ...]"
+
     initial_prompt = f"""TARGET: {target}
 
 RECON DATA:
